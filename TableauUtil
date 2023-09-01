@@ -1,0 +1,470 @@
+package com.sxcoal.coalresource.adhoc.util;
+
+import com.sxcoal.coalresource.adhoc.enums.AdhocRespEnum;
+import com.sxcoal.coalresource.adhoc.exception.AdhocException;
+import com.sxcoal.common.utils.FileUtils;
+import com.sxcoal.common.utils.RequestHolder;
+import com.sxcoal.common.utils.SpringContextUtils;
+import lombok.extern.slf4j.Slf4j;
+import org.dom4j.Document;
+import org.dom4j.DocumentHelper;
+import org.dom4j.Element;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.cloud.context.config.annotation.RefreshScope;
+import org.springframework.core.io.Resource;
+import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.core.ValueOperations;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.MediaType;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
+import org.springframework.http.converter.StringHttpMessageConverter;
+import org.springframework.stereotype.Component;
+import org.springframework.web.client.RestTemplate;
+
+import javax.net.ssl.HostnameVerifier;
+import javax.net.ssl.HttpsURLConnection;
+import javax.net.ssl.SSLSession;
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+import java.io.*;
+import java.net.URL;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.concurrent.TimeUnit;
+
+/**
+ * <p>
+ * tableau相关信息
+ * </p>
+ *
+ * @author dudongjiang
+ * @since 2022-11-09
+ */
+@Slf4j
+@Component
+@RefreshScope
+public class TableauUtil {
+
+    private final String defaultHost = "https://xxx";
+    //用户名
+    @Value("${tableau.username}")
+    private String username;
+    @Value("${tableau.password}")
+    private String password;
+    @Value("${tableau.target_site}")
+    private String target_site;
+    //请求地址
+    @Value("${tableau.serverhost}")
+    private String serverhost;
+    //默认地址
+    @Value("${tableau.defaulturl:}")
+    private String defaulturl;
+
+    private String webNewUserId = "d8e83b83-dbb2-4cdd-acddd-5b8a32e01d6";
+    public String getTrustedUrl(String relativePath) {
+        OutputStreamWriter out = null;
+        BufferedReader in = null;
+        try{
+            StringBuffer data = new StringBuffer();
+            data.append(URLEncoder.encode("username","UTF-8"));
+            data.append("=");
+            data.append(URLEncoder.encode(username,"UTF-8"));
+            data.append("&");
+
+            data.append(URLEncoder.encode("client_ip","UTF-8"));
+            data.append("=");
+            data.append(URLEncoder.encode("","UTF-8"));
+            data.append("&");
+
+            data.append(URLEncoder.encode("target_site","UTF-8"));
+            data.append("=");
+            data.append(URLEncoder.encode(target_site,"UTF-8"));
+
+            String str = serverhost+"/trusted";
+            log.info("data:{}",data);
+            URL url = new URL(str);
+            HttpsURLConnection http = (HttpsURLConnection) url.openConnection();
+            http.setHostnameVerifier(new TableauUtil().new TrustAnyHostnameVerifier());
+            http.setRequestMethod("POST");
+            http.setDoOutput(true);
+
+            out = new OutputStreamWriter(http.getOutputStream());
+            out.write(data.toString());
+            out.flush();
+
+            StringBuffer rsp = new StringBuffer();
+            in = new BufferedReader(new InputStreamReader(http.getInputStream()));
+            String line;
+            while ((line = in.readLine()) != null) {
+                rsp.append(line);
+            }
+            log.info("ticket:{}", rsp);
+            if (rsp.toString().equals("-1")) {
+                return defaultHost + "/trusted/noticket/t/SiteAuthUser/views/_0/sheet0?:iid=1?:embed=yes&:toolbar=no";
+            }
+            log.info("url:{}", defaultHost + "/trusted/" + rsp.toString() + "/t/" + target_site + "/" + relativePath);
+            return defaultHost + "/trusted/" + rsp.toString() + "/t/" + target_site + "/" + relativePath;
+        }catch (Exception e){
+            log.error("获取ticket异常：{}，{}",e.getMessage(),e);
+            throw new AdhocException(AdhocRespEnum.TABLEAU_URL_ERROR);
+        }finally {
+            try {
+                if (in != null)
+                    in.close();
+                if (out != null)
+                    out.close();
+            } catch (IOException e) {
+                log.error("获取ticket异常：{}，{}",e.getMessage(),e);
+                throw new AdhocException(AdhocRespEnum.TABLEAU_URL_ERROR);
+            }
+        }
+    }
+
+    public List<String> getTickets(Integer num) {
+        List<String> tickets = new ArrayList<>();
+        OutputStreamWriter out = null;
+        BufferedReader in = null;
+        try{
+            StringBuffer data = new StringBuffer();
+            data.append(URLEncoder.encode("username","UTF-8"));
+            data.append("=");
+            data.append(URLEncoder.encode(username,"UTF-8"));
+            data.append("&");
+
+            data.append(URLEncoder.encode("client_ip","UTF-8"));
+            data.append("=");
+            data.append(URLEncoder.encode("","UTF-8"));
+            data.append("&");
+
+            data.append(URLEncoder.encode("target_site","UTF-8"));
+            data.append("=");
+            data.append(URLEncoder.encode(target_site,"UTF-8"));
+
+            String str = serverhost+"/trusted";
+            log.info("data:{}",data);
+            URL url = new URL(str);
+            for (int i = 0; i < num; i++) {
+                HttpsURLConnection http = (HttpsURLConnection) url.openConnection();
+                http.setHostnameVerifier(new TableauUtil().new TrustAnyHostnameVerifier());
+                http.setRequestMethod("POST");
+                http.setDoOutput(true);
+
+                out = new OutputStreamWriter(http.getOutputStream());
+                out.write(data.toString());
+                out.flush();
+
+                StringBuffer rsp = new StringBuffer();
+                in = new BufferedReader(new InputStreamReader(http.getInputStream()));
+                String line;
+                while ((line = in.readLine()) != null) {
+                    rsp.append(line);
+                }
+                tickets.add(rsp.toString());
+            }
+            log.info("tickets:{}", tickets);
+            return tickets;
+        }catch (Exception e){
+            log.error("获取ticket异常：{}，{}",e.getMessage(),e);
+            throw new AdhocException(AdhocRespEnum.TABLEAU_URL_ERROR);
+        }finally {
+            try {
+                if (in != null)
+                    in.close();
+                if (out != null)
+                    out.close();
+            } catch (IOException e) {
+                log.error("获取ticket异常：{}，{}",e.getMessage(),e);
+                throw new AdhocException(AdhocRespEnum.TABLEAU_URL_ERROR);
+            }
+        }
+    }
+    // 定制Verifier
+    public class TrustAnyHostnameVerifier implements HostnameVerifier {
+        public boolean verify(String hostname, SSLSession session) {
+            return true;
+        }
+    }
+
+    /**
+     * 文档地址：https://help.tableau.com/current/server/en-us/connected_apps_scopes.htm
+     * https://www.fwenergy.cn/api/3.6/auth/signin
+     * <tsRequest>
+     *     <credentials name="administrator" password="coaL21U6H8m" >
+     *         <site contentUrl="SiteAuthUser" />
+     *     </credentials>
+     * </tsRequest>
+     * JWT启用授权 缓存50分钟，失效时间为60分钟
+     * @return
+     * @throws Exception
+     */
+    public String signin(){
+        String url = "/api/3.9/auth/signin";
+        try{
+            RedisTemplate redisTemplate = (RedisTemplate) SpringContextUtils.getBean("redisTemplate");
+            ValueOperations<String, String> kvRedis = redisTemplate.opsForValue();
+            //50分钟过期
+            if(Boolean.TRUE.equals(redisTemplate.hasKey("tableauJWT")) && !Objects.equals(kvRedis.get("tableauJWT"), "")){
+                return kvRedis.get("tableauJWT");
+            }else{
+                RestTemplate restTemplate = new RestTemplate();
+                restTemplate.getMessageConverters().set(1, new StringHttpMessageConverter(StandardCharsets.UTF_8));
+                HttpHeaders headers = new HttpHeaders();
+                headers.setContentType(MediaType.APPLICATION_XML);
+                HttpEntity httpEntity = new HttpEntity(makeSigninRequestData(), headers);
+                Map body = restTemplate.exchange(defaultHost + url, HttpMethod.POST, httpEntity, Map.class).getBody();
+                if(null == body){
+                    throw new AdhocException(AdhocRespEnum.TABLEAU_REQ_SIGNIN_ERROR);
+                }
+                if(body.get("error") == null){
+                    log.error("JWT获取数据成功:{}",body);
+                    String jwt = ((Map) body.get("credentials")).get("token").toString();
+                    kvRedis.set("tableauJWT", jwt, 50, TimeUnit.MINUTES);
+                    return jwt;
+                }else{
+                    throw new AdhocException(AdhocRespEnum.TABLEAU_REQ_SIGNIN_ERROR);
+                }
+            }
+        }catch (Exception e){
+            log.error("认证请求有误:{}",e);
+            throw new AdhocException(AdhocRespEnum.TABLEAU_REQ_SIGNIN_ERROR);
+        }
+    }
+
+    /**
+     * https://report.fwenergy.cn/api/3.9/sites/d8e83b83-dbb2-4cdd-acdd-5b8a32e01576/views?filter=contentUrl:eq:_0/sheets/sheet4
+     * filter 传递不同的参数，目前前端只有contentUrl
+     * 参数作为头信息
+     * X-Tableau-Auth  tuaRSwFbTR2czO6LVZnRSQ|dWimnpk6U91dy8ONMtBNWtQtu8CUEUy5
+     * @return
+     * 目前存储的数据格式：views/_16692526674590/sheet2?:iid=4
+     * 查询的数据格式：_16699705676940/sheets/sheet2
+     * 视图id 保存7天
+     */
+    public String getViewId(String viewurl){
+        try{
+            String[] split = viewurl.replaceAll("views/", "").replace("?","/").split("/");
+            String resViewUrl = split[0] + "/sheets/" + split[1];
+            String url = "/api/3.9/sites/"+webNewUserId+"/views?filter=contentUrl:eq:" + resViewUrl;
+            RedisTemplate redisTemplate = (RedisTemplate) SpringContextUtils.getBean("redisTemplate");
+            ValueOperations<String, String> kvRedis = redisTemplate.opsForValue();
+            if(Boolean.TRUE.equals(redisTemplate.hasKey(resViewUrl)) && !Objects.equals(kvRedis.get(resViewUrl), "")){
+                return kvRedis.get(resViewUrl+"Name") + "###" + kvRedis.get(resViewUrl);
+            }else{
+                RestTemplate restTemplate = new RestTemplate();
+                restTemplate.getMessageConverters().set(1, new StringHttpMessageConverter(StandardCharsets.UTF_8));
+                HttpHeaders headers = new HttpHeaders();
+                headers.setContentType(MediaType.APPLICATION_XML);
+                headers.set("X-Tableau-Auth",signin());
+                HttpEntity httpEntity = new HttpEntity(makeSigninRequestData(), headers);
+                Map body = restTemplate.exchange(defaultHost + url, HttpMethod.GET, httpEntity, Map.class).getBody();
+                if(null == body){
+                    throw new AdhocException(AdhocRespEnum.TABLEAU_REQ_VIEWID_ERROR);
+                }
+                if(body.get("error") == null){
+                    Map views = (Map) body.get("views");
+                    if(views.size()>0){
+                        String viewId = ((Map) ((ArrayList) views.get("view")).get(0)).get("id").toString();
+                        kvRedis.set(resViewUrl, viewId, 60*24*7, TimeUnit.MINUTES);
+                        String name = ((Map) ((ArrayList) views.get("view")).get(0)).get("name").toString();
+                        kvRedis.set(resViewUrl+"Name",name, 60*24*7, TimeUnit.MINUTES);
+                        return name + "###" + viewId;
+                    }else{
+                        throw new AdhocException(AdhocRespEnum.TABLEAU_REQ_VIEWID_ERROR);
+                    }
+                }else{
+                    throw new AdhocException(AdhocRespEnum.TABLEAU_REQ_VIEWID_ERROR);
+                }
+            }
+        }catch (Exception e){
+            log.error("获取视图id有误：{}",e);
+            throw new AdhocException(AdhocRespEnum.TABLEAU_REQ_VIEWID_ERROR);
+        }
+    }
+    /**
+     * https://help.tableau.com/current/api/rest_api/en-us/REST/rest_api_ref_workbooks_and_views.htm#download_view_excel
+     * GET /api/api-version/sites/site-id/views/view-id/crosstab/excel?maxAge=max-age-minutes
+     * https://www.fwenergy.cn/api/3.9/sites/133483dc-222a-4d95-b81d-3bd2a5d310d7/views/d6402cd1-3661-44cc-8387-7c6438101821/crosstab/excel
+     * X-Tableau-Auth  tuaRSwFbTR2czO6LVZnRSQ|dWimnpk6U91dy8ONMtBNWtQtu8CUEUy5
+     * @return
+     */
+    public void downloadExcel(String viewUrl) {
+        try{
+            String[] viewData = getViewId(viewUrl).split("###");
+            String url = "/api/3.9/sites/"+webNewUserId+"/views/"+viewData[1]+"/crosstab/excel";
+            RestTemplate restTemplate = new RestTemplate();
+            restTemplate.getMessageConverters().set(1, new StringHttpMessageConverter(StandardCharsets.UTF_8));
+            HttpHeaders headers = new HttpHeaders();
+            headers.setContentType(new MediaType("application", "vnd.openxmlformats-officedocument.spreadsheetml.sheet"));
+            headers.set("X-Tableau-Auth",signin());
+            HttpEntity httpEntity = new HttpEntity(makeSigninRequestData(), headers);
+            Resource body = restTemplate.exchange(defaultHost + url, HttpMethod.GET, httpEntity, Resource.class).getBody();
+            if(null == body){
+                throw new AdhocException(AdhocRespEnum.TABLEAU_REQ_DOWNLOWD_ERROR);
+            }
+            String fileName = viewData[0];
+            buildServletResponse(body, fileName+".xlsx");
+        }catch (Exception e){
+            log.error("获取excel下载信息有误：{}",e);
+            throw new AdhocException(AdhocRespEnum.TABLEAU_REQ_DOWNLOWD_ERROR);
+        }
+    }
+    /*
+    https://help.tableau.com/current/api/rest_api/en-us/REST/rest_api_ref_workbooks_and_views.htm#query_view_image
+    */
+    public void downloadImage(String viewUrl,String start,String end,Integer maxAge) {
+        try{
+            String[] viewData = getViewId(viewUrl).split("###");
+            String url = "/api/3.9/sites/"+webNewUserId+"/views/"+viewData[1]+"/image?";
+            if(!"".equals(start) && !"".equals(end)){
+                url += "vf_起始日期="+start+"&vf_结束日期="+end;
+            }else{
+                if(!"".equals(start)){
+                    url += "vf_起始日期="+start;
+                }else if(!"".equals(end)){
+                    url += "vf_结束日期="+end;
+                }
+            }
+            //分辨率 去掉是默认
+            url += "&resolution=high";
+            if(maxAge>=0){
+                url += "&maxAge="+maxAge;
+            }
+            log.info("下载image的地址：{}",url);
+            RestTemplate restTemplate = new RestTemplate();
+            restTemplate.getMessageConverters().set(1, new StringHttpMessageConverter(StandardCharsets.UTF_8));
+            HttpHeaders headers = new HttpHeaders();
+            headers.set("X-Tableau-Auth",signin());
+            HttpEntity httpEntity = new HttpEntity(makeSigninRequestData(), headers);
+            SimpleClientHttpRequestFactory clientHttpRequestFactory = new SimpleClientHttpRequestFactory();
+            clientHttpRequestFactory.setConnectTimeout(15000);
+            clientHttpRequestFactory.setReadTimeout(15000);
+            restTemplate.setRequestFactory(clientHttpRequestFactory);
+            Resource body = restTemplate.exchange(defaultHost + url, HttpMethod.GET, httpEntity, Resource.class).getBody();
+            if(null == body){
+                throw new AdhocException(AdhocRespEnum.TABLEAU_REQ_DOWNLOWD_ERROR);
+            }
+            String fileName = viewData[0];
+            log.info("下载图片的body：{}",body);
+            buildServletResponse(body, fileName+".png");
+        }catch (Exception e){
+            log.error("获取image下载信息有误：{}",e);
+            throw new AdhocException(AdhocRespEnum.TABLEAU_REQ_DOWNLOWD_ERROR);
+        }
+    }
+    public void downloadPdf(String viewUrl,String start,String end) {
+        try{
+            String[] viewData = getViewId(viewUrl).split("###");
+            String url = "/api/3.9/sites/"+webNewUserId+"/views/"+viewData[1]+"/pdf";
+            if(!"".equals(start) && !"".equals(end)){
+                url += "?vf_起始日期="+start+"&vf_结束日期="+end;
+            }else{
+                if(!"".equals(start)){
+                    url += "?vf_起始日期="+start;
+                }else if(!"".equals(end)){
+                    url += "?vf_结束日期="+end;
+                }
+            }
+            log.info("下载pdf的地址：{}",url);
+            RestTemplate restTemplate = new RestTemplate();
+            restTemplate.getMessageConverters().set(1, new StringHttpMessageConverter(StandardCharsets.UTF_8));
+            HttpHeaders headers = new HttpHeaders();
+            headers.set("X-Tableau-Auth",signin());
+            HttpEntity httpEntity = new HttpEntity(makeSigninRequestData(), headers);
+            Resource body = restTemplate.exchange(defaultHost + url, HttpMethod.GET, httpEntity, Resource.class).getBody();
+            if(null == body){
+                throw new AdhocException(AdhocRespEnum.TABLEAU_REQ_DOWNLOWD_ERROR);
+            }
+            String fileName = viewData[0];
+            buildServletResponse(body, fileName+".pdf");
+        }catch (Exception e){
+            log.error("获取PDF下载信息有误：{}",e);
+            throw new AdhocException(AdhocRespEnum.TABLEAU_REQ_DOWNLOWD_ERROR);
+        }
+    }
+    /**
+     * 拼接获取登录的JWT的信息
+     * @return
+     */
+    public String makeSigninRequestData() {
+        try {
+            Document document = DocumentHelper.createDocument();
+            document.setXMLEncoding("UTF-8");
+            Element tsRequest = document.addElement("tsRequest");
+            Element credentials = tsRequest.addElement("credentials");
+//            credentials.addAttribute("name","tabadmin");
+//            credentials.addAttribute("password","tabadmin");
+            credentials.addAttribute("name",username);
+            credentials.addAttribute("password",password);
+            Element site = credentials.addElement("site");
+            site.addAttribute("contentUrl",target_site);
+            String xml = document.asXML();
+            return xml;
+        } catch (Exception e) {
+            log.error(e.getMessage(), e);
+            throw new AdhocException(AdhocRespEnum.TABLEAU_REQ_SIGNIN_ERROR);
+        }
+    }
+
+    /**
+     * 下载文件
+     * @param resource
+     * @param fileName
+     * @throws UnsupportedEncodingException
+     */
+    private void buildServletResponse(Resource resource, String fileName){
+        byte[] buffer = new byte[4096];
+        InputStream is = null;
+        InputStream bis = null;
+        OutputStream os = null;
+        try{
+            is = Objects.requireNonNull(resource).getInputStream();
+            bis = new BufferedInputStream(is);
+
+            HttpServletRequest request = RequestHolder.getRequest();
+            HttpServletResponse response = RequestHolder.getResponse();
+
+            // 下载文件( ServletOutputStream )
+            response.setCharacterEncoding("utf-8");
+            response.setContentType("multipart/form-data");
+            response.setHeader("Content-Disposition","attachment;fileName=" + FileUtils.setFileDownloadHeader(request, fileName));
+
+            os = response.getOutputStream();
+            int size = 0;
+            while ((size = bis.read(buffer)) > 0) {
+                os.write(buffer, 0, size);
+            }
+            os.flush();
+        }catch (Exception e){
+            log.error("获取{}失败,{}",fileName,e);
+            throw new AdhocException(AdhocRespEnum.TABLEAU_REQ_DOWNLOWD_ERROR);
+        }finally {
+            if (os != null) {
+                try {
+                    os.close();
+                } catch (Exception e) {
+                    log.error(e.getMessage(), e);
+                }
+            }
+            if (bis != null) {
+                try {
+                    bis.close();
+                } catch (Exception e) {
+                    log.error(e.getMessage(), e);
+                }
+            }
+            if (is != null) {
+                try {
+                    is.close();
+                } catch (Exception e) {
+                    log.error(e.getMessage(), e);
+                }
+            }
+        }
+    }
+}
